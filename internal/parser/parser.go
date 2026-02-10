@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/PuerkitoBio/goquery"
 	readability "github.com/go-shiori/go-readability"
 )
 
@@ -64,156 +65,152 @@ func Parse(rawHTML []byte, url string) (*Article, error) {
 }
 
 func parseHTML(html string) []ContentBlock {
-	var blocks []ContentBlock
-
-	// Use a simple state-machine parser to extract blocks from readability HTML.
-	// The readability output is relatively clean, so we parse the common tags.
-	type tagState struct {
-		tag   string
-		attrs string
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
+	if err != nil {
+		// Fallback: return the whole thing as one paragraph
+		text := stripTags(html)
+		if text != "" {
+			return []ContentBlock{{Type: BlockParagraph, Text: text}}
+		}
+		return nil
 	}
 
-	lines := strings.Split(html, "\n")
-	var currentBlock *ContentBlock
-	var listItems []string
-	inList := false
-	inOrderedList := false
-	inPre := false
-	var preContent strings.Builder
+	var blocks []ContentBlock
+	doc.Find("body").Children().Each(func(_ int, s *goquery.Selection) {
+		blocks = append(blocks, extractBlocks(s)...)
+	})
+	return blocks
+}
 
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			continue
+func extractBlocks(s *goquery.Selection) []ContentBlock {
+	var blocks []ContentBlock
+	tagName := goquery.NodeName(s)
+
+	switch {
+	case tagName == "h1" || tagName == "h2" || tagName == "h3" ||
+		tagName == "h4" || tagName == "h5" || tagName == "h6":
+		level := int(tagName[1] - '0')
+		text := cleanText(s.Text())
+		if text != "" {
+			blocks = append(blocks, ContentBlock{
+				Type:  BlockHeading,
+				Level: level,
+				Text:  text,
+			})
 		}
 
-		switch {
-		case strings.HasPrefix(trimmed, "<pre"):
-			inPre = true
-			preContent.Reset()
-			// Extract content after the tag on the same line
-			after := extractAfterTag(trimmed, "pre")
-			after = extractAfterTag(after, "code")
-			if after != "" {
-				preContent.WriteString(after)
-			}
+	case tagName == "p":
+		text := cleanText(s.Text())
+		if text != "" {
+			blocks = append(blocks, ContentBlock{
+				Type: BlockParagraph,
+				Text: text,
+			})
+		}
 
-		case inPre:
-			if strings.Contains(trimmed, "</pre>") {
-				before := extractBeforeTag(trimmed, "/pre")
-				before = extractBeforeTag(before, "/code")
-				if before != "" {
-					if preContent.Len() > 0 {
-						preContent.WriteString("\n")
-					}
-					preContent.WriteString(before)
-				}
-				blocks = append(blocks, ContentBlock{
-					Type: BlockCode,
-					Text: cleanHTML(preContent.String()),
-				})
-				inPre = false
-			} else {
-				if preContent.Len() > 0 {
-					preContent.WriteString("\n")
-				}
-				preContent.WriteString(trimmed)
-			}
+	case tagName == "pre":
+		code := s.Find("code")
+		var text string
+		if code.Length() > 0 {
+			text = code.Text()
+		} else {
+			text = s.Text()
+		}
+		text = strings.TrimRight(text, "\n\t ")
+		if text != "" {
+			lang, _ := code.Attr("class")
+			lang = strings.TrimPrefix(lang, "language-")
+			blocks = append(blocks, ContentBlock{
+				Type:     BlockCode,
+				Text:     text,
+				Language: lang,
+			})
+		}
 
-		case strings.HasPrefix(trimmed, "<h1"), strings.HasPrefix(trimmed, "<h2"),
-			strings.HasPrefix(trimmed, "<h3"), strings.HasPrefix(trimmed, "<h4"),
-			strings.HasPrefix(trimmed, "<h5"), strings.HasPrefix(trimmed, "<h6"):
-			level := int(trimmed[2] - '0')
-			text := stripTags(trimmed)
+	case tagName == "ul" || tagName == "ol":
+		var items []string
+		s.Find("li").Each(func(_ int, li *goquery.Selection) {
+			text := cleanText(li.Text())
 			if text != "" {
-				blocks = append(blocks, ContentBlock{
-					Type:  BlockHeading,
-					Level: level,
-					Text:  text,
-				})
+				items = append(items, text)
 			}
+		})
+		if len(items) > 0 {
+			blocks = append(blocks, ContentBlock{
+				Type:    BlockList,
+				Items:   items,
+				Ordered: tagName == "ol",
+			})
+		}
 
-		case strings.HasPrefix(trimmed, "<ul"):
-			inList = true
-			inOrderedList = false
-			listItems = nil
+	case tagName == "blockquote":
+		text := cleanText(s.Text())
+		if text != "" {
+			blocks = append(blocks, ContentBlock{
+				Type: BlockQuote,
+				Text: text,
+			})
+		}
 
-		case strings.HasPrefix(trimmed, "<ol"):
-			inList = true
-			inOrderedList = true
-			listItems = nil
+	case tagName == "hr":
+		blocks = append(blocks, ContentBlock{Type: BlockHR})
 
-		case strings.HasPrefix(trimmed, "</ul>") || strings.HasPrefix(trimmed, "</ol>"):
-			if inList && len(listItems) > 0 {
-				blocks = append(blocks, ContentBlock{
-					Type:    BlockList,
-					Items:   listItems,
-					Ordered: inOrderedList,
-				})
-			}
-			inList = false
-			listItems = nil
-
-		case inList && strings.HasPrefix(trimmed, "<li"):
-			text := stripTags(trimmed)
-			if text != "" {
-				listItems = append(listItems, text)
-			}
-
-		case strings.HasPrefix(trimmed, "<blockquote"):
-			currentBlock = &ContentBlock{Type: BlockQuote}
-
-		case strings.HasPrefix(trimmed, "</blockquote>"):
-			if currentBlock != nil && currentBlock.Text != "" {
-				blocks = append(blocks, *currentBlock)
-			}
-			currentBlock = nil
-
-		case strings.HasPrefix(trimmed, "<hr"):
-			blocks = append(blocks, ContentBlock{Type: BlockHR})
-
-		case strings.HasPrefix(trimmed, "<img"):
-			alt := extractAttr(trimmed, "alt")
+	case tagName == "figure":
+		img := s.Find("img")
+		if img.Length() > 0 {
+			alt, _ := img.Attr("alt")
 			if alt != "" {
 				blocks = append(blocks, ContentBlock{
 					Type: BlockImage,
 					Alt:  alt,
 				})
 			}
-
-		case strings.HasPrefix(trimmed, "<figure"):
-			// skip figure wrapper
-
-		case strings.HasPrefix(trimmed, "<figcaption"):
-			text := stripTags(trimmed)
+		}
+		caption := s.Find("figcaption")
+		if caption.Length() > 0 {
+			text := cleanText(caption.Text())
 			if text != "" {
-				blocks = append(blocks, ContentBlock{
-					Type: BlockParagraph,
-					Text: "  " + text,
-				})
-			}
-
-		default:
-			text := stripTags(trimmed)
-			if text == "" {
-				continue
-			}
-			if currentBlock != nil {
-				// Inside a blockquote
-				if currentBlock.Text != "" {
-					currentBlock.Text += " "
-				}
-				currentBlock.Text += text
-			} else {
 				blocks = append(blocks, ContentBlock{
 					Type: BlockParagraph,
 					Text: text,
 				})
 			}
 		}
+
+	case tagName == "img":
+		alt, _ := s.Attr("alt")
+		if alt != "" {
+			blocks = append(blocks, ContentBlock{
+				Type: BlockImage,
+				Alt:  alt,
+			})
+		}
+
+	case tagName == "div" || tagName == "section" || tagName == "article" || tagName == "main":
+		// Recurse into container elements
+		s.Children().Each(func(_ int, child *goquery.Selection) {
+			blocks = append(blocks, extractBlocks(child)...)
+		})
+
+	default:
+		// Any other element: extract text as paragraph
+		text := cleanText(s.Text())
+		if text != "" {
+			blocks = append(blocks, ContentBlock{
+				Type: BlockParagraph,
+				Text: text,
+			})
+		}
 	}
 
 	return blocks
+}
+
+func cleanText(s string) string {
+	s = decodeEntities(s)
+	// Collapse all whitespace (newlines, tabs, multiple spaces) into single spaces
+	fields := strings.Fields(s)
+	return strings.Join(fields, " ")
 }
 
 func stripTags(s string) string {
@@ -232,46 +229,7 @@ func stripTags(s string) string {
 			result.WriteRune(r)
 		}
 	}
-	return decodeEntities(strings.TrimSpace(result.String()))
-}
-
-func cleanHTML(s string) string {
-	s = stripTags(s)
-	return s
-}
-
-func extractAfterTag(s, tag string) string {
-	idx := strings.Index(s, ">")
-	if idx == -1 {
-		return ""
-	}
-	return strings.TrimSpace(s[idx+1:])
-}
-
-func extractBeforeTag(s, tag string) string {
-	idx := strings.Index(s, "<")
-	if idx == -1 {
-		return s
-	}
-	return strings.TrimSpace(s[:idx])
-}
-
-func extractAttr(s, attr string) string {
-	key := attr + `="`
-	idx := strings.Index(s, key)
-	if idx == -1 {
-		key = attr + `='`
-		idx = strings.Index(s, key)
-		if idx == -1 {
-			return ""
-		}
-	}
-	start := idx + len(key)
-	end := strings.IndexByte(s[start:], s[idx+len(attr)+1])
-	if end == -1 {
-		return ""
-	}
-	return s[start : start+end]
+	return strings.TrimSpace(result.String())
 }
 
 func decodeEntities(s string) string {
@@ -285,11 +243,11 @@ func decodeEntities(s string) string {
 		"&#x27;", "'",
 		"&nbsp;", " ",
 		"&#160;", " ",
-		"&mdash;", "—",
-		"&ndash;", "–",
-		"&hellip;", "…",
-		"&laquo;", "«",
-		"&raquo;", "»",
+		"&mdash;", "\u2014",
+		"&ndash;", "\u2013",
+		"&hellip;", "\u2026",
+		"&laquo;", "\u00ab",
+		"&raquo;", "\u00bb",
 		"&ldquo;", "\u201c",
 		"&rdquo;", "\u201d",
 		"&lsquo;", "\u2018",

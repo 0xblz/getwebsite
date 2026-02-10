@@ -39,7 +39,13 @@ func (r *Renderer) RenderArticle(article *parser.Article) string {
 	b.WriteString("\n\n")
 
 	// Content blocks
-	for _, block := range article.Content {
+	for i, block := range article.Content {
+		// Add a subtle divider before headings (except the first block)
+		if block.Type == parser.BlockHeading && i > 0 {
+			dividerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
+			b.WriteString(dividerStyle.Render("  "+strings.Repeat("─", r.width-4)) + "\n")
+		}
+
 		rendered := r.RenderBlock(block)
 		if rendered != "" {
 			b.WriteString(rendered)
