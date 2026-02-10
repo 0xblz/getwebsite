@@ -43,3 +43,5 @@ internal/ui/ui.go             → Bubbletea TUI (viewport, spinner, search, keyb
 - Links are footnote-style `[N]` in text, collected in a "Links" section at bottom
 - Tables use box-drawing characters (┌─┬─┐ etc.)
 - All terminal styling uses lipgloss; colors are defined as package vars in renderer.go
+- Use `[]rune` not `len(string)` when truncating/padding text — multi-byte chars like `…` cause panics with byte-length math
+- Quote URLs with `?` or `&` in shell examples (zsh interprets them)
