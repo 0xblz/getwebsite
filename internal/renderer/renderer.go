@@ -47,8 +47,28 @@ func (r *Renderer) RenderArticle(article *parser.Article) string {
 	b.WriteString(r.renderTitle(article))
 	b.WriteString("\n\n")
 
-	// Content blocks
+	// Collect and render all images at the top
+	var hasImages bool
+	for _, block := range article.Content {
+		if block.Type == parser.BlockImage && block.URL != "" {
+			rendered := r.renderImage(block)
+			if rendered != "" {
+				b.WriteString(rendered)
+				hasImages = true
+			}
+		}
+	}
+	if hasImages {
+		dividerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
+		b.WriteString(dividerStyle.Render("  "+strings.Repeat("─", r.width-4)) + "\n\n")
+	}
+
+	// Content blocks (skip images since they're already at the top)
 	for i, block := range article.Content {
+		if block.Type == parser.BlockImage {
+			continue
+		}
+
 		// Add a subtle divider before headings (except the first block)
 		if block.Type == parser.BlockHeading && i > 0 {
 			dividerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("238"))

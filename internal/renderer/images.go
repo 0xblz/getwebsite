@@ -66,6 +66,9 @@ func renderInlineImage(url string, maxWidth int) string {
 		width, encoded)
 }
 
+const maxASCIIWidth = 30
+const maxASCIIHeight = 15
+
 // renderASCIIImage fetches an image and converts it to ASCII art.
 func renderASCIIImage(url string, maxWidth int) string {
 	data, err := fetchImage(url)
@@ -78,10 +81,37 @@ func renderASCIIImage(url string, maxWidth int) string {
 		return ""
 	}
 
+	// Downscale to thumbnail size
+	bounds := img.Bounds()
+	imgW := bounds.Dx()
+	imgH := bounds.Dy()
+	if imgW == 0 || imgH == 0 {
+		return ""
+	}
+
+	width := maxASCIIWidth
+	if maxWidth < width {
+		width = maxWidth
+	}
+
+	// Terminal chars are ~2x tall as wide, so halve the height
+	aspect := float64(imgH) / float64(imgW)
+	height := int(float64(width) * aspect * 0.5)
+	if height > maxASCIIHeight {
+		height = maxASCIIHeight
+		width = int(float64(height) / aspect * 2)
+		if width > maxASCIIWidth {
+			width = maxASCIIWidth
+		}
+	}
+	if height < 3 {
+		height = 3
+	}
+
 	converter := convert.NewImageConverter()
 	opts := convert.DefaultOptions
-	opts.FixedWidth = maxWidth
-	opts.FixedHeight = 0 // auto based on aspect ratio
+	opts.FixedWidth = width
+	opts.FixedHeight = height
 	opts.Colored = true
 
 	return converter.Image2ASCIIString(img, &opts)
