@@ -37,17 +37,20 @@ const (
 	BlockQuote
 	BlockImage
 	BlockHR
+	BlockTable
 )
 
 type ContentBlock struct {
 	Type     BlockType
 	Text     string
-	Level    int      // heading level (1-6)
-	Language string   // code language
-	Items    []string // list items
-	Ordered  bool     // ordered list
-	Alt      string   // image alt text
-	URL      string   // image URL
+	Level    int        // heading level (1-6)
+	Language string     // code language
+	Items    []string   // list items
+	Ordered  bool       // ordered list
+	Alt      string     // image alt text
+	URL      string     // image URL
+	Rows     [][]string // table rows
+	Header   bool       // table has header row
 }
 
 func Parse(rawHTML []byte, pageURL string) (*Article, error) {
@@ -223,6 +226,56 @@ func (ctx *parseContext) extractBlocks(s *goquery.Selection) {
 			Alt:  alt,
 			URL:  ctx.resolveURL(src),
 		})
+
+	case tagName == "table":
+		var rows [][]string
+		hasHeader := false
+		// Extract header rows from thead
+		s.Find("thead tr").Each(func(_ int, tr *goquery.Selection) {
+			var row []string
+			tr.Find("th, td").Each(func(_ int, cell *goquery.Selection) {
+				row = append(row, cleanText(cell.Text()))
+			})
+			if len(row) > 0 {
+				rows = append(rows, row)
+				hasHeader = true
+			}
+		})
+		// Extract body rows from tbody, or directly from tr if no thead/tbody
+		tbody := s.Find("tbody")
+		if tbody.Length() > 0 {
+			tbody.Find("tr").Each(func(_ int, tr *goquery.Selection) {
+				var row []string
+				tr.Find("td, th").Each(func(_ int, cell *goquery.Selection) {
+					row = append(row, cleanText(cell.Text()))
+				})
+				if len(row) > 0 {
+					rows = append(rows, row)
+				}
+			})
+		} else if s.Find("thead").Length() == 0 {
+			// No thead/tbody — all rows are direct children
+			s.Find("tr").Each(func(i int, tr *goquery.Selection) {
+				var row []string
+				tr.Find("td, th").Each(func(_ int, cell *goquery.Selection) {
+					row = append(row, cleanText(cell.Text()))
+				})
+				if len(row) > 0 {
+					// If first row is all <th>, treat as header
+					if i == 0 && tr.Find("th").Length() > 0 && tr.Find("td").Length() == 0 {
+						hasHeader = true
+					}
+					rows = append(rows, row)
+				}
+			})
+		}
+		if len(rows) > 0 {
+			ctx.blocks = append(ctx.blocks, ContentBlock{
+				Type:   BlockTable,
+				Rows:   rows,
+				Header: hasHeader,
+			})
+		}
 
 	case tagName == "div" || tagName == "section" || tagName == "article" || tagName == "main":
 		s.Children().Each(func(_ int, child *goquery.Selection) {

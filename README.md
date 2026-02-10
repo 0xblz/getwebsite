@@ -9,6 +9,7 @@ A terminal-based website reader built with Go and the [Charm](https://github.com
 │                                                              │
 │  How to Build Great Terminal UIs                             │
 │  by John Doe · Example Blog                                 │
+│  3 min read · 842 words                                     │
 │                                                              │
 ╰──────────────────────────────────────────────────────────────╯
 
@@ -33,9 +34,16 @@ A terminal-based website reader built with Go and the [Charm](https://github.com
 │ }                                   │
 ╰─────────────────────────────────────╯
 
+  ┌──────────┬─────────┬────────┐
+  │ Feature  │ Status  │ Notes  │
+  ├──────────┼─────────┼────────┤
+  │ Tables   │ Done    │ Auto   │
+  │ Search   │ Done    │ /key   │
+  └──────────┴─────────┴────────┘
+
   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-[↑/k] up  [↓/j] down  [g/G] top/bottom  [q] quit   100%
+[↑/k] up  [↓/j] down  [/] search  []/[] sections  [o] open link  [q] quit  100%
 ```
 
 ## Installation
@@ -69,6 +77,9 @@ getwebsite blaze.design --pipe
 
 # Custom width
 getwebsite blaze.design --width 120
+
+# Export article as markdown
+getwebsite blaze.design --export article.md
 ```
 
 ## Controls
@@ -79,7 +90,12 @@ getwebsite blaze.design --width 120
 | `↑` / `k` | Scroll up |
 | `g` | Jump to top |
 | `G` | Jump to bottom |
-| `q` / `Esc` / `Ctrl+C` | Quit |
+| `/` | Search — type query, press Enter |
+| `n` / `N` | Jump to next / previous search match |
+| `]` / `[` | Jump to next / previous section heading |
+| `o` | Open link — type link number, press Enter |
+| `Esc` | Clear search / cancel input / quit |
+| `q` / `Ctrl+C` | Quit |
 
 ## Project Structure
 
@@ -94,7 +110,9 @@ getwebsite/
 │   ├── parser/
 │   │   └── parser.go            # HTML parsing, content extraction
 │   ├── renderer/
-│   │   └── renderer.go          # Lipgloss styling, terminal layout
+│   │   ├── renderer.go          # Lipgloss styling, terminal layout
+│   │   ├── images.go            # Image rendering (ASCII/iTerm2)
+│   │   └── markdown.go          # Markdown export
 │   └── ui/
 │       └── ui.go                # Bubbletea interactive viewport
 ├── install.sh                   # One-line installer script
@@ -121,19 +139,25 @@ URL → Fetch HTML → Extract Content → Parse to Blocks → Style with Lipglo
 **Parser** (`internal/parser`)
 - Uses [go-readability](https://github.com/go-shiori/go-readability) for article extraction
 - Strips ads, nav bars, footers, popups
-- Parses into typed content blocks: headings, paragraphs, code, lists, quotes, images, HRs
+- Parses into typed content blocks: headings, paragraphs, code, lists, quotes, images, tables, HRs
 - HTML entity decoding
 
 **Renderer** (`internal/renderer`)
 - Lipgloss-styled output with ANSI colors
-- Bordered title box with author/site metadata
+- Bordered title box with author/site metadata and reading time
 - Color-coded headings, styled bullet lists, bordered code blocks
+- Table rendering with box-drawing characters
 - Blockquotes with colored left border
 - Configurable width (default: 90 chars)
+- Markdown export for offline reading
 
 **UI** (`internal/ui`)
 - Bubbletea interactive scrollable viewport
+- Loading spinner while fetching
 - Vim-style keybindings
+- In-page search with match highlighting
+- Section jumping between headings
+- Open links in browser by number
 - Scroll percentage indicator
 - Alt-screen mode
 - Auto-detects piped output and falls back to plain mode
@@ -144,12 +168,13 @@ URL → Fetch HTML → Extract Content → Parse to Blocks → Style with Lipglo
 |------|---------|-------------|
 | Interactive | Default (terminal) | Scrollable view with keybindings |
 | Pipe | `--pipe` or piped stdout | Plain text output for scripting |
+| Export | `--export FILE` | Save article as markdown |
 
 ## Dependencies
 
 - [github.com/charmbracelet/bubbletea](https://github.com/charmbracelet/bubbletea) - TUI framework
 - [github.com/charmbracelet/lipgloss](https://github.com/charmbracelet/lipgloss) - Terminal styling
-- [github.com/charmbracelet/bubbles](https://github.com/charmbracelet/bubbles) - TUI components (viewport)
+- [github.com/charmbracelet/bubbles](https://github.com/charmbracelet/bubbles) - TUI components (viewport, spinner, textinput)
 - [github.com/go-shiori/go-readability](https://github.com/go-shiori/go-readability) - Article content extraction
 
 ## License
