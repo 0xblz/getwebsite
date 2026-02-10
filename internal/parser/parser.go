@@ -126,6 +126,18 @@ func (ctx *parseContext) extractBlocks(s *goquery.Selection) {
 		}
 
 	case tagName == "p":
+		// Extract any images inside the paragraph first
+		s.Find("img").Each(func(_ int, img *goquery.Selection) {
+			src, _ := img.Attr("src")
+			alt, _ := img.Attr("alt")
+			if src != "" {
+				ctx.blocks = append(ctx.blocks, ContentBlock{
+					Type: BlockImage,
+					Alt:  alt,
+					URL:  ctx.resolveURL(src),
+				})
+			}
+		})
 		text := ctx.extractTextWithLinks(s)
 		if text != "" {
 			ctx.blocks = append(ctx.blocks, ContentBlock{
