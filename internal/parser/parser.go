@@ -13,7 +13,7 @@ import (
 
 type Article struct {
 	Title       string
-	Author      string
+	Description string
 	SiteName    string
 	PublishDate time.Time
 	Content     []ContentBlock
@@ -60,11 +60,17 @@ func Parse(rawHTML []byte, pageURL string) (*Article, error) {
 		return nil, fmt.Errorf("extracting article: %w", err)
 	}
 
+	// Extract description from readability excerpt, fall back to raw HTML meta tags
+	description := doc.Excerpt
+	if description == "" {
+		description = extractMetaDescription(rawHTML)
+	}
+
 	article := &Article{
-		Title:    doc.Title,
-		Author:   doc.Byline,
-		SiteName: doc.SiteName,
-		RawHTML:  doc.Content,
+		Title:       doc.Title,
+		Description: description,
+		SiteName:    doc.SiteName,
+		RawHTML:     doc.Content,
 	}
 
 	if article.Title == "" {
@@ -351,6 +357,24 @@ func stripTags(s string) string {
 		}
 	}
 	return strings.TrimSpace(result.String())
+}
+
+func extractMetaDescription(rawHTML []byte) string {
+	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(rawHTML))
+	if err != nil {
+		return ""
+	}
+	// Try og:description first, then meta description
+	if desc, _ := doc.Find(`meta[property="og:description"]`).Attr("content"); desc != "" {
+		return cleanText(desc)
+	}
+	if desc, _ := doc.Find(`meta[name="description"]`).Attr("content"); desc != "" {
+		return cleanText(desc)
+	}
+	if desc, _ := doc.Find(`meta[name="twitter:description"]`).Attr("content"); desc != "" {
+		return cleanText(desc)
+	}
+	return ""
 }
 
 func decodeEntities(s string) string {

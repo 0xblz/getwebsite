@@ -128,18 +128,20 @@ func (r *Renderer) renderTitle(article *parser.Article) string {
 	title := titleStyle.Render(article.Title)
 
 	var meta string
-	parts := []string{}
-	if article.Author != "" {
-		parts = append(parts, "by "+article.Author)
-	}
 	if article.SiteName != "" {
-		parts = append(parts, article.SiteName)
-	}
-	if len(parts) > 0 {
 		metaStyle := lipgloss.NewStyle().
 			Foreground(ColorMeta).
 			Width(contentWidth)
-		meta = metaStyle.Render(strings.Join(parts, " · "))
+		meta = metaStyle.Render(article.SiteName)
+	}
+
+	var desc string
+	if article.Description != "" {
+		descStyle := lipgloss.NewStyle().
+			Foreground(ColorMeta).
+			Italic(true).
+			Width(contentWidth)
+		desc = descStyle.Render(article.Description)
 	}
 
 	// Reading time & word count
@@ -156,6 +158,9 @@ func (r *Renderer) renderTitle(article *parser.Article) string {
 	content := title
 	if meta != "" {
 		content += "\n" + meta
+	}
+	if desc != "" {
+		content += "\n" + desc
 	}
 	content += "\n" + readLine
 

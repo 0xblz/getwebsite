@@ -15,15 +15,11 @@ func RenderMarkdown(article *parser.Article) string {
 	b.WriteString("# " + article.Title + "\n\n")
 
 	// Metadata
-	var meta []string
-	if article.Author != "" {
-		meta = append(meta, "by "+article.Author)
-	}
 	if article.SiteName != "" {
-		meta = append(meta, article.SiteName)
+		b.WriteString("*" + article.SiteName + "*\n\n")
 	}
-	if len(meta) > 0 {
-		b.WriteString("*" + strings.Join(meta, " · ") + "*\n\n")
+	if article.Description != "" {
+		b.WriteString("> " + article.Description + "\n\n")
 	}
 
 	b.WriteString("---\n\n")
