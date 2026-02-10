@@ -386,14 +386,23 @@ func (r *Renderer) renderTable(block parser.ContentBlock) string {
 
 	// Helper to truncate/pad a cell
 	fmtCell := func(text string, width int) string {
-		if len(text) > width {
+		if width < 1 {
+			width = 1
+		}
+		runes := []rune(text)
+		if len(runes) > width {
 			if width > 1 {
-				text = text[:width-1] + "…"
+				runes = append(runes[:width-1], '…')
 			} else {
-				text = text[:width]
+				runes = runes[:width]
 			}
 		}
-		return text + strings.Repeat(" ", width-len(text))
+		text = string(runes)
+		pad := width - len(runes)
+		if pad > 0 {
+			text += strings.Repeat(" ", pad)
+		}
+		return text
 	}
 
 	// Top border
