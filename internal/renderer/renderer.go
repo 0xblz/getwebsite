@@ -224,12 +224,28 @@ func (r *Renderer) renderQuote(block parser.ContentBlock) string {
 }
 
 func (r *Renderer) renderImage(block parser.ContentBlock) string {
-	// Try inline image if terminal supports it and we have a URL
-	if r.inlineImages && block.URL != "" {
-		img := renderInlineImage(block.URL, r.width-4)
-		if img != "" {
+	if block.URL != "" {
+		// Try iTerm2 inline image first
+		if r.inlineImages {
+			img := renderInlineImage(block.URL, r.width-4)
+			if img != "" {
+				var b strings.Builder
+				b.WriteString("  " + img + "\n")
+				if block.Alt != "" {
+					captionStyle := lipgloss.NewStyle().
+						Foreground(ColorImage).
+						Italic(true)
+					b.WriteString(captionStyle.Render("  "+block.Alt) + "\n")
+				}
+				return b.String()
+			}
+		}
+
+		// Fallback to ASCII art
+		ascii := renderASCIIImage(block.URL, r.width-4)
+		if ascii != "" {
 			var b strings.Builder
-			b.WriteString("  " + img + "\n")
+			b.WriteString(ascii)
 			if block.Alt != "" {
 				captionStyle := lipgloss.NewStyle().
 					Foreground(ColorImage).
@@ -240,7 +256,7 @@ func (r *Renderer) renderImage(block parser.ContentBlock) string {
 		}
 	}
 
-	// Fallback to text placeholder
+	// Final fallback to text placeholder
 	alt := block.Alt
 	if alt == "" {
 		alt = "image"
