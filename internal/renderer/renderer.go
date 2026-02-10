@@ -100,23 +100,6 @@ func (r *Renderer) RenderArticle(article *parser.Article) string {
 	return b.String()
 }
 
-func countWords(article *parser.Article) int {
-	count := 0
-	for _, block := range article.Content {
-		switch block.Type {
-		case parser.BlockParagraph, parser.BlockQuote:
-			count += len(strings.Fields(block.Text))
-		case parser.BlockHeading:
-			count += len(strings.Fields(block.Text))
-		case parser.BlockList:
-			for _, item := range block.Items {
-				count += len(strings.Fields(item))
-			}
-		}
-	}
-	return count
-}
-
 func (r *Renderer) renderTitle(article *parser.Article) string {
 	contentWidth := r.width - 4
 
@@ -144,17 +127,6 @@ func (r *Renderer) renderTitle(article *parser.Article) string {
 		desc = descStyle.Render(article.Description)
 	}
 
-	// Reading time & word count
-	words := countWords(article)
-	readMins := (words + 237) / 238 // round up
-	if readMins < 1 {
-		readMins = 1
-	}
-	readStyle := lipgloss.NewStyle().
-		Foreground(ColorMeta).
-		Width(contentWidth)
-	readLine := readStyle.Render(fmt.Sprintf("%d min read · %s words", readMins, formatNumber(words)))
-
 	content := title
 	if meta != "" {
 		content += "\n" + meta
@@ -162,7 +134,6 @@ func (r *Renderer) renderTitle(article *parser.Article) string {
 	if desc != "" {
 		content += "\n" + desc
 	}
-	content += "\n" + readLine
 
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -171,21 +142,6 @@ func (r *Renderer) renderTitle(article *parser.Article) string {
 		Width(r.width)
 
 	return boxStyle.Render(content)
-}
-
-func formatNumber(n int) string {
-	s := fmt.Sprintf("%d", n)
-	if n < 1000 {
-		return s
-	}
-	var result []byte
-	for i, c := range s {
-		if i > 0 && (len(s)-i)%3 == 0 {
-			result = append(result, ',')
-		}
-		result = append(result, byte(c))
-	}
-	return string(result)
 }
 
 func (r *Renderer) RenderBlock(block parser.ContentBlock) string {
