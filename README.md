@@ -8,8 +8,8 @@ A terminal-based website reader built with Go and the [Charm](https://github.com
 ╭──────────────────────────────────────────────────────────────╮
 │                                                              │
 │  How to Build Great Terminal UIs                             │
-│  by John Doe · Example Blog                                 │
-│  3 min read · 842 words                                     │
+│  Example Blog                                                │
+│  A guide to building beautiful command-line interfaces       │
 │                                                              │
 ╰──────────────────────────────────────────────────────────────╯
 
@@ -144,7 +144,7 @@ URL → Fetch HTML → Extract Content → Parse to Blocks → Style with Lipglo
 
 **Renderer** (`internal/renderer`)
 - Lipgloss-styled output with ANSI colors
-- Bordered title box with author/site metadata and reading time
+- Bordered title box with site name and page description
 - Color-coded headings, styled bullet lists, bordered code blocks
 - Table rendering with box-drawing characters
 - Blockquotes with colored left border
