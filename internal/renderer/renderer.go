@@ -5,6 +5,10 @@ import (
 	"strings"
 
 	"github.com/0xblz/getwebsite/internal/parser"
+	"github.com/alecthomas/chroma/v2"
+	"github.com/alecthomas/chroma/v2/formatters"
+	"github.com/alecthomas/chroma/v2/lexers"
+	"github.com/alecthomas/chroma/v2/styles"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -13,6 +17,7 @@ var (
 	ColorH2        = lipgloss.Color("212")
 	ColorH3        = lipgloss.Color("218")
 	ColorLink      = lipgloss.Color("86")
+	ColorLinkRef   = lipgloss.Color("243")
 	ColorCode      = lipgloss.Color("228")
 	ColorCodeBG    = lipgloss.Color("236")
 	ColorQuote     = lipgloss.Color("243")
@@ -24,11 +29,15 @@ var (
 )
 
 type Renderer struct {
-	width int
+	width       int
+	inlineImages bool
 }
 
 func New(width int) *Renderer {
-	return &Renderer{width: width}
+	return &Renderer{
+		width:       width,
+		inlineImages: supportsInlineImages(),
+	}
 }
 
 func (r *Renderer) RenderArticle(article *parser.Article) string {
@@ -51,6 +60,11 @@ func (r *Renderer) RenderArticle(article *parser.Article) string {
 			b.WriteString(rendered)
 			b.WriteString("\n")
 		}
+	}
+
+	// Link footnotes
+	if len(article.Links) > 0 {
+		b.WriteString(r.renderLinks(article.Links))
 	}
 
 	return b.String()
@@ -142,18 +156,18 @@ func (r *Renderer) renderHeading(block parser.ContentBlock) string {
 }
 
 func (r *Renderer) renderParagraph(block parser.ContentBlock) string {
+	// Colorize link references [N] within the text
+	text := colorizeLinks(block.Text)
+
 	style := lipgloss.NewStyle().
 		Width(r.width - 2).
 		PaddingLeft(1)
 
-	return style.Render(block.Text) + "\n"
+	return style.Render(text) + "\n"
 }
 
 func (r *Renderer) renderCode(block parser.ContentBlock) string {
-	codeStyle := lipgloss.NewStyle().
-		Foreground(ColorCode).
-		Background(ColorCodeBG).
-		Padding(0, 1)
+	highlighted := highlightCode(block.Text, block.Language)
 
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -162,8 +176,7 @@ func (r *Renderer) renderCode(block parser.ContentBlock) string {
 		MarginLeft(2).
 		Width(r.width - 6)
 
-	code := codeStyle.Render(block.Text)
-	return boxStyle.Render(code) + "\n"
+	return boxStyle.Render(highlighted) + "\n"
 }
 
 func (r *Renderer) renderList(block parser.ContentBlock) string {
@@ -171,6 +184,7 @@ func (r *Renderer) renderList(block parser.ContentBlock) string {
 	bulletStyle := lipgloss.NewStyle().Foreground(ColorBullet)
 
 	for i, item := range block.Items {
+		item = colorizeLinks(item)
 		var prefix string
 		if block.Ordered {
 			prefix = fmt.Sprintf("  %d. ", i+1)
@@ -200,7 +214,7 @@ func (r *Renderer) renderQuote(block parser.ContentBlock) string {
 		PaddingLeft(1)
 
 	bar := barStyle.Render("┃")
-	lines := strings.Split(textStyle.Render(block.Text), "\n")
+	lines := strings.Split(textStyle.Render(colorizeLinks(block.Text)), "\n")
 	var b strings.Builder
 	for _, line := range lines {
 		b.WriteString("  " + bar + " " + line + "\n")
@@ -210,11 +224,32 @@ func (r *Renderer) renderQuote(block parser.ContentBlock) string {
 }
 
 func (r *Renderer) renderImage(block parser.ContentBlock) string {
+	// Try inline image if terminal supports it and we have a URL
+	if r.inlineImages && block.URL != "" {
+		img := renderInlineImage(block.URL, r.width-4)
+		if img != "" {
+			var b strings.Builder
+			b.WriteString("  " + img + "\n")
+			if block.Alt != "" {
+				captionStyle := lipgloss.NewStyle().
+					Foreground(ColorImage).
+					Italic(true)
+				b.WriteString(captionStyle.Render("  "+block.Alt) + "\n")
+			}
+			return b.String()
+		}
+	}
+
+	// Fallback to text placeholder
+	alt := block.Alt
+	if alt == "" {
+		alt = "image"
+	}
 	style := lipgloss.NewStyle().
 		Foreground(ColorImage).
 		Italic(true)
 
-	return style.Render("  [IMAGE: "+block.Alt+"]") + "\n"
+	return style.Render("  [IMAGE: "+alt+"]") + "\n"
 }
 
 func (r *Renderer) renderHR() string {
@@ -222,4 +257,104 @@ func (r *Renderer) renderHR() string {
 		Foreground(ColorHR)
 
 	return style.Render("  " + strings.Repeat("━", r.width-4)) + "\n"
+}
+
+func (r *Renderer) renderLinks(links []parser.Link) string {
+	var b strings.Builder
+
+	dividerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
+	b.WriteString("\n" + dividerStyle.Render("  "+strings.Repeat("─", r.width-4)) + "\n")
+
+	headerStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(ColorMeta)
+	b.WriteString(headerStyle.Render("  Links") + "\n\n")
+
+	idxStyle := lipgloss.NewStyle().Foreground(ColorLink).Bold(true)
+	urlStyle := lipgloss.NewStyle().Foreground(ColorLink)
+	textStyle := lipgloss.NewStyle().Foreground(ColorMeta)
+
+	for _, link := range links {
+		idx := idxStyle.Render(fmt.Sprintf("  [%d]", link.Index))
+		text := textStyle.Render(link.Text)
+		url := urlStyle.Render(link.URL)
+
+		// Use OSC 8 hyperlink if possible (clickable in supported terminals)
+		clickableURL := fmt.Sprintf("\033]8;;%s\033\\%s\033]8;;\033\\", link.URL, url)
+
+		b.WriteString(fmt.Sprintf("%s %s\n      %s\n", idx, text, clickableURL))
+	}
+
+	return b.String()
+}
+
+// colorizeLinks applies styling to [N] link references within text.
+func colorizeLinks(text string) string {
+	refStyle := lipgloss.NewStyle().
+		Foreground(ColorLink).
+		Bold(true)
+
+	var result strings.Builder
+	i := 0
+	for i < len(text) {
+		if text[i] == '[' {
+			// Look for a closing bracket with only digits inside
+			j := i + 1
+			for j < len(text) && text[j] >= '0' && text[j] <= '9' {
+				j++
+			}
+			if j > i+1 && j < len(text) && text[j] == ']' {
+				ref := text[i : j+1]
+				result.WriteString(refStyle.Render(ref))
+				i = j + 1
+				continue
+			}
+		}
+		result.WriteByte(text[i])
+		i++
+	}
+	return result.String()
+}
+
+// highlightCode uses chroma to syntax-highlight code.
+func highlightCode(code, language string) string {
+	var lexer chroma.Lexer
+	if language != "" {
+		lexer = lexers.Get(language)
+	}
+	if lexer == nil {
+		lexer = lexers.Analyse(code)
+	}
+	if lexer == nil {
+		lexer = lexers.Fallback
+	}
+	lexer = chroma.Coalesce(lexer)
+
+	style := styles.Get("monokai")
+	if style == nil {
+		style = styles.Fallback
+	}
+
+	formatter := formatters.Get("terminal256")
+	if formatter == nil {
+		formatter = formatters.Fallback
+	}
+
+	iterator, err := lexer.Tokenise(nil, code)
+	if err != nil {
+		// Fallback: return unstyled
+		codeStyle := lipgloss.NewStyle().
+			Foreground(ColorCode)
+		return codeStyle.Render(code)
+	}
+
+	var b strings.Builder
+	err = formatter.Format(&b, style, iterator)
+	if err != nil {
+		codeStyle := lipgloss.NewStyle().
+			Foreground(ColorCode)
+		return codeStyle.Render(code)
+	}
+
+	return strings.TrimRight(b.String(), "\n")
 }

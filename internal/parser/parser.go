@@ -3,6 +3,7 @@ package parser
 import (
 	"bytes"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -16,7 +17,14 @@ type Article struct {
 	SiteName    string
 	PublishDate time.Time
 	Content     []ContentBlock
+	Links       []Link
 	RawHTML     string
+}
+
+type Link struct {
+	Index int
+	Text  string
+	URL   string
 }
 
 type BlockType int
@@ -39,9 +47,10 @@ type ContentBlock struct {
 	Items    []string // list items
 	Ordered  bool     // ordered list
 	Alt      string   // image alt text
+	URL      string   // image URL
 }
 
-func Parse(rawHTML []byte, url string) (*Article, error) {
+func Parse(rawHTML []byte, pageURL string) (*Article, error) {
 	reader := bytes.NewReader(rawHTML)
 	doc, err := readability.FromReader(reader, nil)
 	if err != nil {
@@ -56,34 +65,51 @@ func Parse(rawHTML []byte, url string) (*Article, error) {
 	}
 
 	if article.Title == "" {
-		article.Title = url
+		article.Title = pageURL
 	}
 
-	article.Content = parseHTML(doc.Content)
+	base, _ := url.Parse(pageURL)
+	article.Content, article.Links = parseHTML(doc.Content, base)
 
 	return article, nil
 }
 
-func parseHTML(html string) []ContentBlock {
+func parseHTML(html string, base *url.URL) ([]ContentBlock, []Link) {
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
 	if err != nil {
-		// Fallback: return the whole thing as one paragraph
 		text := stripTags(html)
 		if text != "" {
-			return []ContentBlock{{Type: BlockParagraph, Text: text}}
+			return []ContentBlock{{Type: BlockParagraph, Text: text}}, nil
 		}
-		return nil
+		return nil, nil
 	}
 
-	var blocks []ContentBlock
+	ctx := &parseContext{base: base}
 	doc.Find("body").Children().Each(func(_ int, s *goquery.Selection) {
-		blocks = append(blocks, extractBlocks(s)...)
+		ctx.extractBlocks(s)
 	})
-	return blocks
+	return ctx.blocks, ctx.links
 }
 
-func extractBlocks(s *goquery.Selection) []ContentBlock {
-	var blocks []ContentBlock
+type parseContext struct {
+	blocks  []ContentBlock
+	links   []Link
+	linkIdx int
+	base    *url.URL
+}
+
+func (ctx *parseContext) resolveURL(href string) string {
+	if ctx.base == nil {
+		return href
+	}
+	parsed, err := url.Parse(href)
+	if err != nil {
+		return href
+	}
+	return ctx.base.ResolveReference(parsed).String()
+}
+
+func (ctx *parseContext) extractBlocks(s *goquery.Selection) {
 	tagName := goquery.NodeName(s)
 
 	switch {
@@ -92,7 +118,7 @@ func extractBlocks(s *goquery.Selection) []ContentBlock {
 		level := int(tagName[1] - '0')
 		text := cleanText(s.Text())
 		if text != "" {
-			blocks = append(blocks, ContentBlock{
+			ctx.blocks = append(ctx.blocks, ContentBlock{
 				Type:  BlockHeading,
 				Level: level,
 				Text:  text,
@@ -100,9 +126,9 @@ func extractBlocks(s *goquery.Selection) []ContentBlock {
 		}
 
 	case tagName == "p":
-		text := cleanText(s.Text())
+		text := ctx.extractTextWithLinks(s)
 		if text != "" {
-			blocks = append(blocks, ContentBlock{
+			ctx.blocks = append(ctx.blocks, ContentBlock{
 				Type: BlockParagraph,
 				Text: text,
 			})
@@ -120,7 +146,7 @@ func extractBlocks(s *goquery.Selection) []ContentBlock {
 		if text != "" {
 			lang, _ := code.Attr("class")
 			lang = strings.TrimPrefix(lang, "language-")
-			blocks = append(blocks, ContentBlock{
+			ctx.blocks = append(ctx.blocks, ContentBlock{
 				Type:     BlockCode,
 				Text:     text,
 				Language: lang,
@@ -130,13 +156,13 @@ func extractBlocks(s *goquery.Selection) []ContentBlock {
 	case tagName == "ul" || tagName == "ol":
 		var items []string
 		s.Find("li").Each(func(_ int, li *goquery.Selection) {
-			text := cleanText(li.Text())
+			text := ctx.extractTextWithLinks(li)
 			if text != "" {
 				items = append(items, text)
 			}
 		})
 		if len(items) > 0 {
-			blocks = append(blocks, ContentBlock{
+			ctx.blocks = append(ctx.blocks, ContentBlock{
 				Type:    BlockList,
 				Items:   items,
 				Ordered: tagName == "ol",
@@ -144,33 +170,33 @@ func extractBlocks(s *goquery.Selection) []ContentBlock {
 		}
 
 	case tagName == "blockquote":
-		text := cleanText(s.Text())
+		text := ctx.extractTextWithLinks(s)
 		if text != "" {
-			blocks = append(blocks, ContentBlock{
+			ctx.blocks = append(ctx.blocks, ContentBlock{
 				Type: BlockQuote,
 				Text: text,
 			})
 		}
 
 	case tagName == "hr":
-		blocks = append(blocks, ContentBlock{Type: BlockHR})
+		ctx.blocks = append(ctx.blocks, ContentBlock{Type: BlockHR})
 
 	case tagName == "figure":
 		img := s.Find("img")
 		if img.Length() > 0 {
 			alt, _ := img.Attr("alt")
-			if alt != "" {
-				blocks = append(blocks, ContentBlock{
-					Type: BlockImage,
-					Alt:  alt,
-				})
-			}
+			src, _ := img.Attr("src")
+			ctx.blocks = append(ctx.blocks, ContentBlock{
+				Type: BlockImage,
+				Alt:  alt,
+				URL:  ctx.resolveURL(src),
+			})
 		}
 		caption := s.Find("figcaption")
 		if caption.Length() > 0 {
 			text := cleanText(caption.Text())
 			if text != "" {
-				blocks = append(blocks, ContentBlock{
+				ctx.blocks = append(ctx.blocks, ContentBlock{
 					Type: BlockParagraph,
 					Text: text,
 				})
@@ -179,36 +205,66 @@ func extractBlocks(s *goquery.Selection) []ContentBlock {
 
 	case tagName == "img":
 		alt, _ := s.Attr("alt")
-		if alt != "" {
-			blocks = append(blocks, ContentBlock{
-				Type: BlockImage,
-				Alt:  alt,
-			})
-		}
+		src, _ := s.Attr("src")
+		ctx.blocks = append(ctx.blocks, ContentBlock{
+			Type: BlockImage,
+			Alt:  alt,
+			URL:  ctx.resolveURL(src),
+		})
 
 	case tagName == "div" || tagName == "section" || tagName == "article" || tagName == "main":
-		// Recurse into container elements
 		s.Children().Each(func(_ int, child *goquery.Selection) {
-			blocks = append(blocks, extractBlocks(child)...)
+			ctx.extractBlocks(child)
 		})
 
 	default:
-		// Any other element: extract text as paragraph
-		text := cleanText(s.Text())
+		text := ctx.extractTextWithLinks(s)
 		if text != "" {
-			blocks = append(blocks, ContentBlock{
+			ctx.blocks = append(ctx.blocks, ContentBlock{
 				Type: BlockParagraph,
 				Text: text,
 			})
 		}
 	}
+}
 
-	return blocks
+// extractTextWithLinks walks the DOM tree and replaces <a> tags with
+// "link text [N]" where N is a footnote index, collecting the URL.
+func (ctx *parseContext) extractTextWithLinks(s *goquery.Selection) string {
+	var b strings.Builder
+	s.Contents().Each(func(_ int, child *goquery.Selection) {
+		if goquery.NodeName(child) == "a" {
+			href, exists := child.Attr("href")
+			text := cleanText(child.Text())
+			if text == "" {
+				return
+			}
+			if exists && href != "" && href != "#" {
+				ctx.linkIdx++
+				ctx.links = append(ctx.links, Link{
+					Index: ctx.linkIdx,
+					Text:  text,
+					URL:   ctx.resolveURL(href),
+				})
+				b.WriteString(text)
+				b.WriteString(fmt.Sprintf(" [%d]", ctx.linkIdx))
+			} else {
+				b.WriteString(text)
+			}
+		} else if goquery.NodeName(child) == "#text" {
+			b.WriteString(child.Text())
+		} else {
+			// Recurse into other inline elements (em, strong, span, etc.)
+			b.WriteString(ctx.extractTextWithLinks(child))
+		}
+	})
+	result := b.String()
+	fields := strings.Fields(decodeEntities(result))
+	return strings.Join(fields, " ")
 }
 
 func cleanText(s string) string {
 	s = decodeEntities(s)
-	// Collapse all whitespace (newlines, tabs, multiple spaces) into single spaces
 	fields := strings.Fields(s)
 	return strings.Join(fields, " ")
 }
